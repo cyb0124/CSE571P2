@@ -3,12 +3,14 @@ import matplotlib.pyplot as plt
 import torch, model, car
 from map_utils import *
 import numpy as np
+from sampler import *
 
-m = Map('demo_map/floorplan.yaml', laser_max_range=car.LASER_MAX_RANGE, downsample_factor=5)
-start = np.array([1.0, 6.0, 0.0])
-goal = np.array([5.0, 6.0])
-fig, ax = plt.subplots()
-vis = Visualizer(m, ax)
+DISPLAY = True
+fig = None
+ax = None
+vis = None
+records = []
+
 def visualize(s, depth):
   ax.clear()
   vis.draw_map()
@@ -113,13 +115,14 @@ def train():
   else:
     do_target_update = True
 
-def episode():
+def episode(start, goal, m):
   s = start
   distance = np.linalg.norm(s[:2] - goal)
   depth = m.get_1d_depth(s[:2], s[2], car.FOV, car.N_RAY)
   features = model.assemble_features(depth, car.compute_relative_goal(s, goal))
   while features is not None:
-    # visualize(s, depth)
+    if DISPLAY:
+      visualize(s, depth)
     with torch.no_grad():
       action = actor.forward(torch.tensor([features], dtype=torch.float, device=dev))[0].cpu().numpy()
     action = np.clip(action, -1, 1)
@@ -131,14 +134,16 @@ def episode():
       features_next = None
       reward = model.REWARD_COLLISION
       print('collision')
+      records.append(0)
     else:
       distance_next = np.linalg.norm(s_next[:2] - goal)
-      print('distance=' + str(distance_next))
+      #print('distance=' + str(distance_next))
       if distance_next <= car.COLLISION_RADIUS:
         depth_next = None
         features_next = None
         reward = model.REWARD_GOAL
         print('goal')
+        records.append(1)
       else:
         depth_next = m.get_1d_depth(s_next[:2], s_next[2], car.FOV, car.N_RAY)
         features_next = model.assemble_features(depth_next, car.compute_relative_goal(s_next, goal))
@@ -150,6 +155,25 @@ def episode():
     depth = depth_next
     features = features_next
 
+dir_list = os.listdir('maps')
+
+if DISPLAY:
+  fig, ax = plt.subplots()
+
+count = 0
 while True:
-  episode()
+  m = Map(sampleMap(dir_list))
+  if DISPLAY:
+    vis = Visualizer(m, ax)
+  start = sampleStart(m)
+  goal = sampleGoal(m, start, num_steps=200, step_size=0.05)  
+  episode(start, goal, m)
   save_model()
+  count += 1
+  # save records every 10 episodes
+  if count>1 and count%10 == 0:
+    data = np.array(records)
+    np.savetxt('records.csv', data, delimiter=',')
+    if len(data) > 100:
+      data_clip = data[-100:]
+      print("success rate in last 100 episode: {}".format(np.sum(data_clip)))

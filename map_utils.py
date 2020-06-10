@@ -166,7 +166,17 @@ class Map(object):
         :param xys: a numpy array of size N x 2 containing N points.
         '''
         return rotate_2d(xys, heading) + pos
-
+    
+    def is_valid(self, pos):
+        '''
+        Check if the current position is a valid one
+        :param pos: a numpy array of size 2
+        '''
+        x, y = self.grid_coord(pos[0], pos[1])
+        if self.occupancy_grid[x,y] == 0:
+            return True
+        else:
+            return False
 
 class Visualizer:
     def __init__(self, map, ax):
