@@ -23,8 +23,8 @@ def visualize(m, s, depth, start, goal):
   vis.draw_obstacles(obstacles, markeredgewidth=1.5, color='red')
   car.draw(s, ax, 'green')
   car.draw(goal, ax, 'blue')
-  ax.set_xlim([min(start[0], goal[0]) - 1, max(start[0], goal[0]) + 1])
-  ax.set_ylim([min(start[1], goal[1]) - 1, max(start[1], goal[1]) + 1])
+  ax.set_xlim([min(start[0], goal[0], s[0]) - 1, max(start[0], goal[0],s[0]) + 1])
+  ax.set_ylim([min(start[1], goal[1], s[1]) - 1, max(start[1], goal[1], s[1]) + 1])
   plt.pause(0.01)
 
 FN_MODEL = 'model.pt'
