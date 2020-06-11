@@ -113,7 +113,7 @@ def train():
   if do_target_update:
     do_target_update = False
     action_c = actor.forward(features_c)
-    penalty = action_c ** 2
+    penalty = torch.clamp(action_c ** 2 - 1, 0)
     penalty = model.SATURATION_PENALTY * torch.sum(penalty, 1)
     action_c = torch.clamp(action_c, -1, 1)
     query_c = torch.cat((features_c, action_c), 1)
@@ -136,8 +136,8 @@ def episode(start, goal, m):
   step = 0
   while features is not None:
     with torch.no_grad():
-      action = actor.forward(torch.tensor([features], dtype=torch.float, device=dev))[0].cpu().numpy()
-    action = np.clip(action, -1, 1)
+      raw_action = actor.forward(torch.tensor([features], dtype=torch.float, device=dev))[0].cpu().numpy()
+    action = np.clip(raw_action, -1, 1)
     action = np.clip(action + np.random.normal(scale=model.NOISE_E, size=2), -1, 1)
     s_next = car.simulate(s, action)
     if car.collision_violation(s_next, m):
@@ -150,6 +150,7 @@ def episode(start, goal, m):
     else:
       distance_next = np.linalg.norm(s_next[:2] - goal)
       if DISPLAY_PERIOD > 0 and step % DISPLAY_PERIOD == 0:
+        print('raw_action: ' + str(raw_action))
         print('distance: ' + str(distance_next))
         visualize(m, s, depth, start, goal)
       if distance_next <= car.COLLISION_RADIUS:
