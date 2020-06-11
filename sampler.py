@@ -2,6 +2,7 @@ import os
 from map_utils import *
 import numpy as np
 import car
+from AStarPlanner import AStarPlanner
 
 
 def sampleMap(map_dir_list):
@@ -29,36 +30,42 @@ def sampleStart(map):
     else:
       return s
 
-def sampleGoal(map, start, num_steps=100, step_size=0.1, min_dis=1.0):
+def sampleGoal(map, start, radius=1.0, search_steps = 1000):
   """ 
   Note: We need to make sure that the goal is reachable, and the path is not too long
-  We apply some random walk from the start point.
+  We use A* planner to check if the goal can be reached in bounded search iterations
   """
   current_pos = start[:2]
-  pre_theta = np.random.random_sample() * np.pi * 2
-  for i in range(num_steps):
-    theta = pre_theta + (np.random.random_sample() - 0.5) * np.pi/2
-    next_x = current_pos[0] + step_size*np.cos(theta)
-    next_y = current_pos[1] + step_size*np.sin(theta)
+  planner = AStarPlanner(map, 10)
+  goal = None
+  r = radius
+  i = 0
+  N = 10
+  # we first try to find a goal r away.
+  # if can't find a valid goal after N tries, we reduce r to its half
+  while(True):
+    theta = np.random.random_sample() * np.pi * 2
+    next_x = current_pos[0] + r*np.cos(theta)
+    next_y = current_pos[1] + r*np.sin(theta)
     next_pos = np.array([next_x, next_y])
-    if car.collision_violation(next_pos, map):
-      continue
+    cost = planner.Plan(current_pos, next_pos, search_steps)
+    if cost > 0:
+      return next_pos, cost
     else:
-      #print(np.linalg.norm(current_pos - start[:2]))
-      current_pos = next_pos
-      pre_theta = theta
-  
-  return current_pos
+      i += 1
+    if (i > 10):
+      r = r/2
+      i = 0
 
 if __name__ == '__main__':
   dir_list = os.listdir('maps')
   while(True):
-    m = Map(sampleMap(dir_list))
+    map_dir = sampleMap(dir_list)
+    print(map_dir)
+    m = Map(map_dir)
     start = sampleStart(m)
-    goal = sampleGoal(m, start, num_steps=200, step_size=0.05) 
+    print(start)
+    goal = sampleGoal(m, start, radius=1.5, search_steps=1000) 
     fig, ax = plt.subplots()
     vis = Visualizer(m, ax)
     visualizeGoal(start, goal, ax, vis)
-
-
-

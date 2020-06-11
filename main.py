@@ -5,7 +5,7 @@ from map_utils import *
 import numpy as np
 from sampler import *
 
-DISPLAY = True
+DISPLAY = False 
 fig = None
 ax = None
 vis = None
@@ -162,18 +162,23 @@ if DISPLAY:
 
 count = 0
 while True:
-  m = Map(sampleMap(dir_list))
+  map_dir = sampleMap(dir_list)
+  m = Map(map_dir)
   if DISPLAY:
     vis = Visualizer(m, ax)
   start = sampleStart(m)
-  goal = sampleGoal(m, start, num_steps=200, step_size=0.05)  
-  episode(start, goal, m)
-  save_model()
-  count += 1
-  # save records every 10 episodes
-  if count>1 and count%10 == 0:
-    data = np.array(records)
-    np.savetxt('records.csv', data, delimiter=',')
-    if len(data) > 100:
-      data_clip = data[-100:]
-      print("success rate in last 100 episode: {}".format(np.sum(data_clip)))
+  goal, cost = sampleGoal(m, start, radius=1.5, search_steps=1000)   
+  print("current map {}, start={}, goal={}, cost={}".format(map_dir, start, goal, cost)) 
+  if cost > 0.5:     # pass goals that are too close
+    for i in range(10):
+      # train 10 times for each (map, start, goal) configuration
+      episode(start, goal, m)
+      save_model()
+      count += 1
+      # save records every 10 episodes
+      if count>1 and count%30 == 0:
+        data = np.array(records)
+        np.savetxt('records.csv', data, delimiter=',')
+        if len(data) > 100:
+          data_clip = data[-100:]
+          print("success rate in last 100 episode: {}".format(np.sum(data_clip)))
