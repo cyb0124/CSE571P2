@@ -1,183 +1,115 @@
 import numpy as np
-from heapq import *
-import itertools
 import car
+import numpy as np
 
-class AStarPlanner(object):    
-    def __init__(self, env_map, epsilon):
-        self.map = env_map 
+class AStarNode:
+    def __init__(self, coord):
+        self.coord = coord
+        # open, cost, heuristic, priority, heap_idx
+
+    def update_priority(self):
+        self.priority = self.cost + self.heuristic
+
+class AStarPlanner:
+    def __init__(self, map, goal_config, epsilon=10):
+        self.goal_config = goal_config
+        self.epsilon = 10
         self.nodes = {}
-        self.epsilon = epsilon
-        self.visited = np.zeros(self.map.occupancy_grid.shape)
-        self.back_track = BackTracker()
+        self.heap = []
+        self.map = map
 
-    def Plan(self, start_config, goal_config, max_itr=1000):
-        state_count = 0
-        OPEN = My_Priority_Queue()
-        OPEN.insert(start_config, self.epsilon * self.h(start_config, goal_config))
-        itr = 0
-        reached_goal = None
-        while(True):
-            itr += 1
-            candidate = OPEN.delete_min()
-            if len(candidate) > 0:
-                (c_config, c_cost) = candidate 
-                #print(c_config)
-            else:
-                # all state has been expanded but goal still not found
-                #print("ERROR: no plan found!!!")
-                return 0.0 
-            if(itr > max_itr):
-                #print("timed out!")
-                return 0.0 
-            #if(np.array_equal(c_config, goal_config)):
-            if(self.is_equal(c_config, goal_config)):
-                cost = c_cost
-                reached_goal = c_config
-                #print("goal reached!")
+    def swap_node(self, a, b):
+        self.heap[a].heap_idx = b
+        self.heap[b].heap_idx = a
+        self.heap[a], self.heap[b] = self.heap[b], self.heap[a]
+
+    def percolate_up(self, idx):
+        while idx > 0:
+            parent = (idx - 1) // 2
+            if self.heap[parent].priority <= self.heap[idx].priority:
                 break
-            # get all successors and push them to the OPEN list
-            successor_list = self.Successors(c_config)
-            state_count += 1
-            for cost, successor in successor_list:
-                current_cost = c_cost - self.epsilon * self.h(c_config, goal_config)
-                new_cost = current_cost + cost + self.epsilon * self.h(successor, goal_config)
-                if successor in OPEN:
-                    if OPEN[successor] > new_cost:
-                        OPEN.insert(successor, new_cost)     # update priority
-                        self.back_track.record(c_config, successor)
-                else:
-                    OPEN.insert(successor, new_cost)
-                    self.back_track.record(c_config, successor)
-            # mark current as visited
-            self.MarkVisited(c_config)
-        
-        # now back-tracking
-        plan = []
-        current = reached_goal 
-        while(not self.is_equal(current, start_config)):
-            plan.append(current)
-            current = self.back_track.getParent(current)
-        plan.append(start_config) 
-        plan.reverse()
-        #print("States Expanded: %d" % state_count)
-        #sprint("Cost: %f" % cost)
-        return cost
+            self.swap_node(idx, parent)
+            idx = parent
 
-    def is_equal(self, pos1, pos2):
-        ''' check if two position (in world system) is equal '''
-        if np.sum(np.abs(pos1 - pos2)) < self.map.resolution:
-            return True
+    def percolate_down(self, idx):
+        while True:
+            child = idx * 2 + 1
+            if child >= len(self.heap):
+                break
+            if child + 1 < len(self.heap) and self.heap[child + 1].priority < self.heap[child].priority:
+                child += 1
+            if self.heap[idx].priority <= self.heap[child].priority:
+                break
+            self.swap_node(idx, child)
+            idx = child
+
+    def open_node(self, node):
+        node.open = True
+        node.update_priority()
+        node.heap_idx = len(self.heap)
+        self.heap.append(node)
+        self.percolate_up(node.heap_idx)
+
+    def add_node(self, node):
+        node.heuristic = np.linalg.norm(node.coord * self.map.resolution - self.goal_config) * self.epsilon
+        self.nodes[(node.coord.item(0), node.coord.item(1))] = node
+        self.open_node(node)
+
+    def pop_node(self):
+        best = self.heap[0]
+        best.open = False
+        self.swap_node(0, len(self.heap) - 1)
+        self.heap.pop()
+        self.percolate_down(0)
+        return best
+
+    def update_node(self, node):
+        old_priority = node.priority
+        node.update_priority()
+        if node.priority < old_priority:
+            self.percolate_up(node.heap_idx)
         else:
-            return False
+            self.percolate_down(node.heap_idx)
 
-    def h(self, pos1, pos2):
-        pos1 = pos1[:2]
-        pos2 = pos2[:2]
-        return np.sqrt(np.sum((pos1 - pos2)**2))
+    def update_neighbor(self, node, dx, dy):
+        delta_coord = np.array([dx, dy])
+        neighbor_coord = node.coord + delta_coord
+        new_cost = node.cost + np.linalg.norm(delta_coord) * self.map.resolution
+        if (neighbor_coord.item(0), neighbor_coord.item(1)) in self.nodes:
+            neighbor = self.nodes[(neighbor_coord.item(0), neighbor_coord.item(1))]
+            if new_cost < neighbor.cost:
+                neighbor.cost = new_cost
+                if neighbor.open:
+                    self.update_node(neighbor)
+                else:
+                    self.open_node(neighbor)
+        else:
+            neighbor = AStarNode(neighbor_coord)
+            neighbor.cost = new_cost
+            self.add_node(neighbor)
 
-    def Successors(self, config):
-        """ return all successors that havn't visited and the corresponding cost from config to each successor """
-        r = self.map.resolution
-        successors_list = []
-        for dx in [-r, 0, r]:
-            for dy in [-r, 0, r]:
-                if dx != 0 or dy !=0:
-                    y1 = config[1] + dy
-                    x1 = config[0] + dx
-                    successor_candidate = np.array((x1, y1))
-                    if not car.collision_violation(successor_candidate, self.map) and not self.isVisited(successor_candidate):
-                    #if self.env.state_validity_checker(successor_candidate) and not self.isVisited(successor_candidate):
-                        successors_list.append((np.sqrt(dx**2 + dy**2), successor_candidate))
-        return successors_list
-
-    def MarkVisited(self, config):
-        ''' config in world frame'''
-        x , y = self.map.grid_coord(config[0], config[1])
-        self.visited[y, x] = 1
-
-    def isVisited(self, config):
-        ''' conifg in world frame '''
-        x , y = self.map.grid_coord(config[0], config[1])
-        return (self.visited[y, x] == 1)
-
-class BackTracker:
-    def __init__(self):
-        self.mydict = {}
-
-    def record(self, parent, child):
-        p = (float(parent[0]), float(parent[1]))
-        c = (float(child[0]), float(child[1]))
-        self.mydict[c] = p 
-        
-    def getParent(self, child):
-        c = (float(child[0]), float(child[1]))
-        p = self.mydict[c]
-        return np.array((p[0], p[1]))
-
-class My_Priority_Queue:
-    ''' This priority queue is implemented with heap queue algorithm
-        see https://docs.python.org/2/library/heapq.html#priority-queue-implementation-notes'''
-        
-    def __init__(self):
-        self.pq = [] 
-        self.entry_finder = {}
-        self.counter = itertools.count()
-
-    def Convert(self, config):
-        ''' convert the state into turple which is hashable'''
-        return (config[0], config[1])
-
-    def deConvert(self, t):
-        return np.array((t[0], t[1]))
-
-    def __contains__(self, config):
-        c = self.Convert(config) 
-        if c in self.entry_finder:
-            if self.entry_finder[c] != None:
-                return True
-        return False
-
-    def __getitem__(self, config):
-        '''This method enables Pythons right-bracket syntax.
-        Here, something like  priority_val = my_queue[state]
-        becomes possible. Note that the syntax is actually used
-        in the insert method above:  self[state] != -1  '''
-        c = self.Convert(config)
-        if c not in self:
+    def plan(self, start_config, max_iter):
+        node = AStarNode(np.rint(start_config / self.map.resolution).astype(np.int))
+        node.cost = 0.0
+        self.add_node(node)
+        success = False
+        state_count = 0
+        while len(self.heap) > 0 and state_count < max_iter:
+            node = self.pop_node()
+            state_count += 1
+            if car.collision_violation(node.coord * self.map.resolution, self.map):
+                continue
+            if np.sum(np.abs(node.coord * self.map.resolution - self.goal_config)) < self.map.resolution:
+                success = True
+                break
+            self.update_neighbor(node, 1, 0)
+            self.update_neighbor(node, 1, 1)
+            self.update_neighbor(node, 0, 1)
+            self.update_neighbor(node, -1, 1)
+            self.update_neighbor(node, -1, 0)
+            self.update_neighbor(node, -1, -1)
+            self.update_neighbor(node, 0, -1)
+            self.update_neighbor(node, 1, -1)
+        if not success:
             return -1
-        entry = self.entry_finder[c]
-        return self.entry_finder[c][0]
-
-    def __delitem__(self, config):
-        '''This method enables Python's del operator to delete
-        items from the queue.'''
-        c = self.Convert(config)
-        entry = self.entry_finder.pop(c)
-        entry[-1] = None
-
-    def __str__(self):
-        txt = "My_Priority_Queue: ["
-        for (p,_,s) in self.pq: txt += '('+str(s)+', '+str(p)+')'
-        txt += ']'
-        return txt
-
-    def delete_min(self):
-        ''' Standard priority-queue dequeuing method.'''
-        if self.pq==[]: return [] # Simpler than raising an exception.
-        while self.pq:
-            priority, count, c = heappop(self.pq)
-            if c != None:
-                del self.entry_finder[c]
-                return (self.deConvert(c), priority)
-
-    def insert(self, config, priority):
-        ''' add a new task or update the priority of an existing task '''
-        c = self.Convert(config)
-        if c in self.entry_finder:
-            del self[config]
-        count = next(self.counter)
-        entry = [priority, count, c]
-        self.entry_finder[c] = entry
-        heappush(self.pq, entry)
-        
+        return node.cost

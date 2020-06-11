@@ -1,5 +1,7 @@
 # Database for experiences and sum-tree for prioritized experience replay.
 # Yibo Cao
+# 2020/3/4: Created
+# 2020/6/1: Added getPriority
 
 import sqlite3
 import random
@@ -106,6 +108,9 @@ class Sample:
   def update(self, priority):
     self.pool.cursor.execute('update pool set priority=? where id=?', (priority, self.id))
     self.pool.tree.set(self.id, priority)
+
+  def getPriority(self):
+    return self.pool.tree.map[self.id].sum
 
 class Pool:
   def __init__(self, fn):

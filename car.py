@@ -11,7 +11,7 @@ DT = 0.1
 
 # Laser
 LASER_MAX_RANGE = 4
-FOV = np.deg2rad(240)
+FOV = 2 * np.pi
 N_RAY = 100
 
 # Collision

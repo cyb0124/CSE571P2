@@ -2,22 +2,29 @@ from prioritized_experience_database import Pool
 import matplotlib.pyplot as plt
 import torch, model, car
 from map_utils import *
-import numpy as np
 from sampler import *
+import numpy as np
 
-DISPLAY = False 
-fig = None
-ax = None
-vis = None
+RECORD_SAVE_PERIOD = 10
+N_RECENT_RECORD = 100
+DISPLAY_PERIOD = 10
+MIN_COST = 0.5
+ALPHA = 0.6
+BETA = 0.4
+
 records = []
-
-def visualize(s, depth):
+if DISPLAY_PERIOD > 0:
+  fig, ax = plt.subplots()
+def visualize(m, s, depth, start, goal):
   ax.clear()
+  vis = Visualizer(m, ax)
   vis.draw_map()
   obstacles = depth_to_xy(depth, s[:2], s[2], car.FOV)
   vis.draw_obstacles(obstacles, markeredgewidth=1.5, color='red')
   car.draw(s, ax, 'green')
   car.draw(goal, ax, 'blue')
+  ax.set_xlim([min(start[0], goal[0]) - 1, max(start[0], goal[0]) + 1])
+  ax.set_ylim([min(start[1], goal[1]) - 1, max(start[1], goal[1]) + 1])
   plt.pause(0.01)
 
 FN_MODEL = 'model.pt'
@@ -51,6 +58,11 @@ else:
   critic_2_t.load_state_dict(critic_2.state_dict())
   do_target_update = False
 
+for p in actor_opt.param_groups:
+  p['lr'] = model.LR
+for p in critic_opt.param_groups:
+  p['lr'] = model.LR
+
 def save_model():
   torch.save({
     'actor' : actor.state_dict(),
@@ -75,6 +87,7 @@ def train():
   reward = torch.tensor([i.r for i in batch], dtype=torch.float, device=dev)
   noise_s = torch.normal(mean=torch.zeros((model.N_BATCH, 2), dtype=torch.float, device=dev), std=model.NOISE_S)
   noise_s = torch.clamp(noise_s, -model.CLIP_S, model.CLIP_S)
+  importance = 1 / torch.tensor([i.getPriority() for i in batch], dtype=torch.float, device=dev) ** BETA
   with torch.no_grad():
     action_t = torch.clamp(actor_t.forward(features_t), -1, 1)
     action_t = torch.clamp(action_t + noise_s, -1, 1)
@@ -88,14 +101,14 @@ def train():
   q_2 = critic_2.forward(query_c).squeeze(1)
   error_1 = q_1 - q_t
   error_2 = q_2 - q_t
-  for i, e in zip(batch, torch.abs(error_1) + torch.abs(error_2)):
+  for i, e in zip(batch, (torch.abs(error_1) + torch.abs(error_2)) ** ALPHA):
     i.update(e.item())
   pool.commit()
   critic_opt.zero_grad()
-  loss = torch.mean(error_1 * error_1 + error_2 * error_2)
+  loss = torch.sum((error_1 * error_1 + error_2 * error_2) * importance)
   loss.backward()
   critic_opt.step()
-  
+
   global do_target_update
   if do_target_update:
     do_target_update = False
@@ -106,7 +119,7 @@ def train():
     query_c = torch.cat((features_c, action_c), 1)
     q_1 = critic_1.forward(query_c).squeeze(1)
     actor_opt.zero_grad()
-    loss = torch.mean(penalty - q_1)
+    loss = torch.sum((penalty - q_1) * importance)
     loss.backward()
     actor_opt.step()
     with torch.no_grad():
@@ -120,9 +133,8 @@ def episode(start, goal, m):
   distance = np.linalg.norm(s[:2] - goal)
   depth = m.get_1d_depth(s[:2], s[2], car.FOV, car.N_RAY)
   features = model.assemble_features(depth, car.compute_relative_goal(s, goal))
+  step = 0
   while features is not None:
-    if DISPLAY:
-      visualize(s, depth)
     with torch.no_grad():
       action = actor.forward(torch.tensor([features], dtype=torch.float, device=dev))[0].cpu().numpy()
     action = np.clip(action, -1, 1)
@@ -134,16 +146,18 @@ def episode(start, goal, m):
       features_next = None
       reward = model.REWARD_COLLISION
       print('collision')
-      records.append(0)
+      records.append(False)
     else:
       distance_next = np.linalg.norm(s_next[:2] - goal)
-      #print('distance=' + str(distance_next))
+      if DISPLAY_PERIOD > 0 and step % DISPLAY_PERIOD == 0:
+        print('distance: ' + str(distance_next))
+        visualize(m, s, depth, start, goal)
       if distance_next <= car.COLLISION_RADIUS:
         depth_next = None
         features_next = None
         reward = model.REWARD_GOAL
         print('goal')
-        records.append(1)
+        records.append(True)
       else:
         depth_next = m.get_1d_depth(s_next[:2], s_next[2], car.FOV, car.N_RAY)
         features_next = model.assemble_features(depth_next, car.compute_relative_goal(s_next, goal))
@@ -154,31 +168,27 @@ def episode(start, goal, m):
     distance = distance_next
     depth = depth_next
     features = features_next
-
-dir_list = os.listdir('maps')
-
-if DISPLAY:
-  fig, ax = plt.subplots()
+    step += 1
 
 count = 0
 while True:
-  map_dir = sampleMap(dir_list)
-  m = Map(map_dir)
-  if DISPLAY:
-    vis = Visualizer(m, ax)
+  map_name = sampleMap()
+  m = Map(map_name)
   start = sampleStart(m)
-  goal, cost = sampleGoal(m, start, radius=1.5, search_steps=1000)   
-  print("current map {}, start={}, goal={}, cost={}".format(map_dir, start, goal, cost)) 
-  if cost > 0.5:     # pass goals that are too close
-    for i in range(10):
-      # train 10 times for each (map, start, goal) configuration
+  goal, cost = sampleGoal(m, start)
+  print("current map {}, start={}, goal={}, cost={}".format(map_name, start, goal, cost))
+  if cost > MIN_COST: # Skip goals that are too close.
+    while True:
+      # Train for (map, start, goal) configuration until no collision.
       episode(start, goal, m)
       save_model()
       count += 1
-      # save records every 10 episodes
-      if count>1 and count%30 == 0:
+      # Save records every RECORD_SAVE_PERIOD episodes.
+      if count % RECORD_SAVE_PERIOD == 0:
         data = np.array(records)
         np.savetxt('records.csv', data, delimiter=',')
-        if len(data) > 100:
-          data_clip = data[-100:]
-          print("success rate in last 100 episode: {}".format(np.sum(data_clip)))
+        if len(data) > N_RECENT_RECORD:
+          data_clip = data[-N_RECENT_RECORD:]
+          print("success rate in last {} episode: {}".format(N_RECENT_RECORD, np.sum(data_clip)))
+      if records[-1]:
+        break
