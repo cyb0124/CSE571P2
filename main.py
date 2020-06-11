@@ -128,7 +128,8 @@ def train():
   else:
     do_target_update = True
 
-def episode(start, goal, m):
+def episode(start, goal, m, noise_e):
+  print('noise_e: ' + str(noise_e))
   s = start
   distance = np.linalg.norm(s[:2] - goal)
   depth = m.get_1d_depth(s[:2], s[2], car.FOV, car.N_RAY)
@@ -138,7 +139,7 @@ def episode(start, goal, m):
     with torch.no_grad():
       raw_action = actor.forward(torch.tensor([features], dtype=torch.float, device=dev))[0].cpu().numpy()
     action = np.clip(raw_action, -1, 1)
-    action = np.clip(action + np.random.normal(scale=model.NOISE_E, size=2), -1, 1)
+    action = np.clip(action + np.random.normal(scale=noise_e, size=2), -1, 1)
     s_next = car.simulate(s, action)
     if car.collision_violation(s_next, m):
       distance_next = None
@@ -181,7 +182,7 @@ while True:
   if cost > MIN_COST: # Skip goals that are too close.
     while True:
       # Train for (map, start, goal) configuration until no collision.
-      episode(start, goal, m)
+      episode(start, goal, m, np.sin(2 * np.pi * count / 20) * 0.5 + 0.5)
       save_model()
       count += 1
       # Save records every RECORD_SAVE_PERIOD episodes.
